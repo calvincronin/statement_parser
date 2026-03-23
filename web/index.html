@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Statement Parser</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #f5f5f7;
+            color: #1d1d1f;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 2rem 1rem;
+        }
+
+        h1 {
+            font-size: 1.8rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        .subtitle {
+            color: #86868b;
+            margin-bottom: 2rem;
+            font-size: 0.95rem;
+        }
+
+        .card {
+            background: white;
+            border-radius: 16px;
+            padding: 2rem;
+            width: 100%;
+            max-width: 600px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+        }
+
+        .drop-zone {
+            border: 2px dashed #d2d2d7;
+            border-radius: 12px;
+            padding: 3rem 1.5rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .drop-zone:hover,
+        .drop-zone.dragover {
+            border-color: #0071e3;
+            background: #f0f7ff;
+        }
+
+        .drop-zone p {
+            color: #86868b;
+            margin-top: 0.5rem;
+            font-size: 0.9rem;
+        }
+
+        .drop-zone .icon {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .drop-zone label {
+            display: inline-block;
+            margin-top: 1rem;
+            padding: 0.6rem 1.5rem;
+            background: #0071e3;
+            color: white;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            font-weight: 500;
+            cursor: pointer;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        #status {
+            margin-top: 1.5rem;
+            text-align: center;
+            font-size: 0.95rem;
+            min-height: 1.4rem;
+        }
+
+        #status.error {
+            color: #ff3b30;
+        }
+
+        #status.success {
+            color: #34c759;
+        }
+
+        #results {
+            margin-top: 1.5rem;
+            display: none;
+        }
+
+        #results summary {
+            font-weight: 500;
+            margin-bottom: 1rem;
+        }
+
+        .btn-download {
+            display: block;
+            width: 100%;
+            padding: 0.8rem;
+            background: #34c759;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            margin-top: 1rem;
+        }
+
+        .btn-download:active {
+            opacity: 0.8;
+        }
+
+        table.preview {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8rem;
+            margin-top: 0.5rem;
+        }
+
+        table.preview th,
+        table.preview td {
+            padding: 0.4rem 0.5rem;
+            border-bottom: 1px solid #e5e5ea;
+            text-align: left;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 150px;
+        }
+
+        table.preview th {
+            font-weight: 600;
+            color: #86868b;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+        }
+
+        .table-scroll {
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        .privacy {
+            margin-top: 2rem;
+            text-align: center;
+            font-size: 0.8rem;
+            color: #86868b;
+            max-width: 600px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Statement Parser</h1>
+    <p class="subtitle">Credit union PDF statements to CSV</p>
+
+    <div class="card">
+        <div class="drop-zone" id="dropZone">
+            <div class="icon">&#128196;</div>
+            <p>Drag & drop your statement PDF here</p>
+            <label for="fileInput">Choose File</label>
+            <input type="file" id="fileInput" accept=".pdf">
+        </div>
+
+        <div id="status"></div>
+
+        <div id="results">
+            <details open>
+                <summary id="previewSummary">Preview</summary>
+                <div class="table-scroll" id="previewTable"></div>
+            </details>
+            <button class="btn-download" id="downloadBtn">Download CSV</button>
+        </div>
+    </div>
+
+    <p class="privacy">Your file never leaves your device. All processing happens in your browser.</p>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs" type="module"></script>
+    <script type="module">
+        // Import PDF.js
+        const pdfjsLib = await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs");
+        pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs";
+
+        // --- Parser logic (ported from extract.py) ---
+
+        const MONEY_RE = /-?[\d,]+\.\d{2}/g;
+        const DATE_START_RE = /^(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\s+/;
+        const TABLE_START_RE = /^(\d{1,2}\/\d{1,2})\s+ID\s+\d+\s+(.+?)\s+Previous\s+Balance\s+([\d,]+\.\d{2})/i;
+        const TABLE_END_RE = /Annual\s+Percentage\s+Yield\s+Earned/i;
+        const PAGE_JUNK_END_RE = /to\s+thank\s+you\s+for\s+your\s+business/i;
+
+        const SKIP_PATTERNS = [
+            /Based\s+on\s+Average\s+Daily\s+Balance/i,
+            /New\s+Balance/i,
+            /Dividends\s+Earned\s+Year\s+to\s+Date/i,
+            /page\s+\d+/i,
+            /continued\s+on/i,
+            /account\s+number/i,
+            /statement\s+period/i,
+            /send\s+inquiries/i,
+            /credit\s+union/i,
+        ];
+
+        const COLUMNS = ["Account", "Posting Date", "Transaction Description", "Transaction Amount", "Balance"];
+
+        function shouldSkip(line) {
+            const s = line.trim();
+            if (!s) return true;
+            return SKIP_PATTERNS.some(p => p.test(s));
+        }
+
+        function parseTransactionLine(line) {
+            const stripped = line.trim();
+            const dateMatch = stripped.match(DATE_START_RE);
+            if (!dateMatch) return null;
+
+            const postingDate = dateMatch[1];
+            const rest = stripped.slice(dateMatch[0].length);
+
+            // Find all money amounts
+            const moneyMatches = [...rest.matchAll(new RegExp(MONEY_RE.source, "g"))];
+
+            if (moneyMatches.length === 0) {
+                return {
+                    postingDate,
+                    description: rest.trim(),
+                    amounts: [],
+                };
+            }
+
+            const firstMoneyStart = moneyMatches[0].index;
+            const description = rest.slice(0, firstMoneyStart).trim();
+            const amounts = moneyMatches.map(m => m[0].replace(/,/g, ""));
+
+            return {
+                postingDate,
+                description,
+                amounts,
+            };
+        }
+
+        function isContinuationLine(line) {
+            const stripped = line.trim();
+            if (!stripped) return false;
+            if (/^\d{1,2}\/\d{1,2}/.test(stripped)) return false;
+            if (shouldSkip(stripped)) return false;
+            if (TABLE_END_RE.test(stripped)) return false;
+            if (PAGE_JUNK_END_RE.test(stripped)) return false;
+            return true;
+        }
+
+        async function extractText(pdfData) {
+            const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
+            const pages = [];
+
+            for (let i = 1; i <= pdf.numPages; i++) {
+                const page = await pdf.getPage(i);
+                const content = await page.getTextContent();
+
+                // Group text items into lines by y-position
+                const lineMap = new Map();
+                for (const item of content.items) {
+                    if (!item.str) continue;
+                    // Round y to group items on the same line
+                    const y = Math.round(item.transform[5] * 2) / 2;
+                    if (!lineMap.has(y)) lineMap.set(y, []);
+                    lineMap.get(y).push({ x: item.transform[4], text: item.str });
+                }
+
+                // Sort lines top-to-bottom (higher y = higher on page in PDF coords)
+                const sortedYs = [...lineMap.keys()].sort((a, b) => b - a);
+                const lines = sortedYs.map(y => {
+                    const items = lineMap.get(y).sort((a, b) => a.x - b.x);
+                    return items.map(i => i.text).join(" ");
+                });
+
+                pages.push(lines);
+            }
+
+            return pages;
+        }
+
+        function parseTransactions(pages) {
+            const transactions = [];
+            let currentAccount = null;
+            let inTable = false;
+            let expectDebitDetail = false;
+
+            for (const lines of pages) {
+                let pastJunk = false;
+
+                for (const line of lines) {
+                    const stripped = line.trim();
+
+                    // Detect end of page junk
+                    if (!pastJunk) {
+                        if (PAGE_JUNK_END_RE.test(stripped)) {
+                            pastJunk = true;
+                        }
+                        continue;
+                    }
+
+                    // Detect table end
+                    if (TABLE_END_RE.test(stripped)) {
+                        inTable = false;
+                        continue;
+                    }
+
+                    // Detect table start
+                    const tableMatch = stripped.match(TABLE_START_RE);
+                    if (tableMatch) {
+                        currentAccount = tableMatch[2].trim();
+                        inTable = true;
+                        continue;
+                    }
+
+                    if (inTable) {
+                        if (shouldSkip(stripped)) continue;
+
+                        // Check for debit card detail line
+                        if (expectDebitDetail && /^\d{1,2}\/\d{1,2}/.test(stripped)) {
+                            transactions[transactions.length - 1].description += " " + stripped;
+                            expectDebitDetail = false;
+                            continue;
+                        }
+
+                        expectDebitDetail = false;
+
+                        const txn = parseTransactionLine(stripped);
+                        if (txn) {
+                            txn.account = currentAccount;
+                            if (txn.description.toLowerCase().includes("debit card")) {
+                                expectDebitDetail = true;
+                            }
+                            transactions.push(txn);
+                            continue;
+                        }
+
+                        if (transactions.length > 0 && isContinuationLine(stripped)) {
+                            transactions[transactions.length - 1].description += " " + stripped;
+                        }
+                    }
+                }
+            }
+
+            return transactions;
+        }
+
+        function transactionsToRows(transactions) {
+            return transactions.map(txn => {
+                const amounts = txn.amounts;
+                const balance = amounts.length >= 1 ? amounts[amounts.length - 1] : "";
+                const txnAmount = amounts.length >= 2 ? amounts[amounts.length - 2] : "";
+
+                return [
+                    txn.account || "",
+                    txn.postingDate,
+                    txn.description,
+                    txnAmount,
+                    balance,
+                ];
+            });
+        }
+
+        function rowsToCsv(rows) {
+            const escape = (val) => {
+                const s = String(val);
+                if (s.includes(",") || s.includes('"') || s.includes("\n")) {
+                    return '"' + s.replace(/"/g, '""') + '"';
+                }
+                return s;
+            };
+
+            const lines = [COLUMNS.map(escape).join(",")];
+            for (const row of rows) {
+                lines.push(row.map(escape).join(","));
+            }
+            return lines.join("\n");
+        }
+
+        // --- UI logic ---
+
+        const dropZone = document.getElementById("dropZone");
+        const fileInput = document.getElementById("fileInput");
+        const status = document.getElementById("status");
+        const results = document.getElementById("results");
+        const previewSummary = document.getElementById("previewSummary");
+        const previewTable = document.getElementById("previewTable");
+        const downloadBtn = document.getElementById("downloadBtn");
+
+        let csvData = null;
+        let fileName = "transactions.csv";
+
+        function setStatus(msg, type = "") {
+            status.textContent = msg;
+            status.className = type;
+        }
+
+        async function processFile(file) {
+            if (!file || !file.name.toLowerCase().endsWith(".pdf")) {
+                setStatus("Please select a PDF file.", "error");
+                return;
+            }
+
+            fileName = file.name.replace(/\.pdf$/i, ".csv");
+            setStatus("Processing...");
+            results.style.display = "none";
+
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                const pages = await extractText(new Uint8Array(arrayBuffer));
+                const transactions = parseTransactions(pages);
+
+                if (transactions.length === 0) {
+                    setStatus("No transactions found. Is this a supported credit union statement?", "error");
+                    return;
+                }
+
+                const rows = transactionsToRows(transactions);
+                csvData = rowsToCsv(rows);
+
+                // Show preview (first 10 rows)
+                const previewRows = rows.slice(0, 10);
+                let html = '<table class="preview"><thead><tr>';
+                for (const col of COLUMNS) {
+                    html += `<th>${col}</th>`;
+                }
+                html += "</tr></thead><tbody>";
+                for (const row of previewRows) {
+                    html += "<tr>";
+                    for (const cell of row) {
+                        html += `<td>${escapeHtml(cell)}</td>`;
+                    }
+                    html += "</tr>";
+                }
+                html += "</tbody></table>";
+
+                previewSummary.textContent = `Preview (${Math.min(10, rows.length)} of ${rows.length} transactions)`;
+                previewTable.innerHTML = html;
+                results.style.display = "block";
+
+                setStatus(`Found ${transactions.length} transaction(s).`, "success");
+            } catch (err) {
+                console.error(err);
+                setStatus("Error processing PDF: " + err.message, "error");
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement("div");
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // File input
+        fileInput.addEventListener("change", (e) => {
+            if (e.target.files.length > 0) {
+                processFile(e.target.files[0]);
+            }
+        });
+
+        // Drag and drop
+        dropZone.addEventListener("dragover", (e) => {
+            e.preventDefault();
+            dropZone.classList.add("dragover");
+        });
+
+        dropZone.addEventListener("dragleave", () => {
+            dropZone.classList.remove("dragover");
+        });
+
+        dropZone.addEventListener("drop", (e) => {
+            e.preventDefault();
+            dropZone.classList.remove("dragover");
+            if (e.dataTransfer.files.length > 0) {
+                processFile(e.dataTransfer.files[0]);
+            }
+        });
+
+        // Download
+        downloadBtn.addEventListener("click", () => {
+            if (!csvData) return;
+            const blob = new Blob([csvData], { type: "text/csv" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = fileName;
+            a.click();
+            URL.revokeObjectURL(url);
+        });
+    </script>
+</body>
+</html>
