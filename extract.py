@@ -33,15 +33,13 @@ TABLE_START_RE = re.compile(
 )
 
 # Table end marker
-TABLE_END_RE = re.compile(r"Annual\s+Percentage\s+Yield\s+Earned", re.IGNORECASE)
+TABLE_END_RE = re.compile(r"New\s+Balance", re.IGNORECASE)
 
 # Page junk end marker
 PAGE_JUNK_END_RE = re.compile(r"to\s+thank\s+you\s+for\s+your\s+business", re.IGNORECASE)
 
 # Summary/metadata lines to skip when inside a table
 SKIP_PATTERNS = [
-    re.compile(r"Based\s+on\s+Average\s+Daily\s+Balance", re.IGNORECASE),
-    re.compile(r"New\s+Balance", re.IGNORECASE),
     re.compile(r"Dividends\s+Earned\s+Year\s+to\s+Date", re.IGNORECASE),
     re.compile(r"page\s+\d+", re.IGNORECASE),
     re.compile(r"continued\s+on", re.IGNORECASE),
@@ -164,10 +162,33 @@ def extract_transactions(pdf_path: str, pages: set[int] | None = None, debug: bo
                         past_junk = True
                         if debug:
                             print(f"[DEBUG] PAGE JUNK ENDED: {stripped!r}", file=sys.stderr)
+                        continue
+
+                    # Escape junk when we recognise table data:
+                    # - mid-table: a transaction line or table end/start marker
+                    # - between tables: a new table start marker
+                    if in_table:
+                        txn_probe = parse_transaction_line(stripped)
+                        if (txn_probe and txn_probe["amounts"]
+                                or TABLE_END_RE.search(stripped)
+                                or TABLE_START_RE.match(stripped)):
+                            past_junk = True
+                            if debug:
+                                print(f"[DEBUG] PAGE JUNK ENDED (mid-table, matched data): {stripped!r}", file=sys.stderr)
+                            # Fall through to process this line normally
+                        else:
+                            if debug and stripped:
+                                print(f"[DEBUG] SKIPPED (page junk): {stripped!r}", file=sys.stderr)
+                            continue
+                    elif TABLE_START_RE.match(stripped):
+                        past_junk = True
+                        if debug:
+                            print(f"[DEBUG] PAGE JUNK ENDED (table start): {stripped!r}", file=sys.stderr)
+                        # Fall through to process this line normally
                     else:
                         if debug and stripped:
                             print(f"[DEBUG] SKIPPED (page junk): {stripped!r}", file=sys.stderr)
-                    continue
+                        continue
 
                 # Detect table end
                 if TABLE_END_RE.search(stripped):

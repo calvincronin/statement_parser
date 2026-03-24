@@ -203,12 +203,10 @@
         const MONEY_RE = /-?[\d,]+\.\d{2}/g;
         const DATE_START_RE = /^(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\s+/;
         const TABLE_START_RE = /^(\d{1,2}\/\d{1,2})\s+ID\s+\d+\s+(.+?)\s+Previous\s+Balance\s+([\d,]+\.\d{2})/i;
-        const TABLE_END_RE = /Annual\s+Percentage\s+Yield\s+Earned/i;
+        const TABLE_END_RE = /New\s+Balance/i;
         const PAGE_JUNK_END_RE = /to\s+thank\s+you\s+for\s+your\s+business/i;
 
         const SKIP_PATTERNS = [
-            /Based\s+on\s+Average\s+Daily\s+Balance/i,
-            /New\s+Balance/i,
             /Dividends\s+Earned\s+Year\s+to\s+Date/i,
             /page\s+\d+/i,
             /continued\s+on/i,
@@ -313,8 +311,28 @@
                     if (!pastJunk) {
                         if (PAGE_JUNK_END_RE.test(stripped)) {
                             pastJunk = true;
+                            continue;
                         }
-                        continue;
+
+                        // Escape junk when we recognise table data:
+                        // - mid-table: a transaction line or table end/start marker
+                        // - between tables: a new table start marker
+                        if (inTable) {
+                            const txnProbe = parseTransactionLine(stripped);
+                            if ((txnProbe && txnProbe.amounts.length > 0)
+                                    || TABLE_END_RE.test(stripped)
+                                    || TABLE_START_RE.test(stripped)) {
+                                pastJunk = true;
+                                // Fall through to process this line normally
+                            } else {
+                                continue;
+                            }
+                        } else if (TABLE_START_RE.test(stripped)) {
+                            pastJunk = true;
+                            // Fall through to process this line normally
+                        } else {
+                            continue;
+                        }
                     }
 
                     // Detect table end
